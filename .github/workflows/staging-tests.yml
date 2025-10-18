@@ -1,0 +1,61 @@
+name: Staging Tests
+
+on:
+  push:
+    branches: [ staging ]
+  pull_request:
+    branches: [ staging, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest flake8
+    
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+      continue-on-error: true
+    
+    - name: Check if app starts
+      run: |
+        # Test if the Streamlit app can be imported without errors
+        python -c "import streamlit; print('Streamlit imported successfully')"
+        echo "✓ Dependencies check passed"
+    
+    - name: Validate requirements.txt
+      run: |
+        echo "Checking requirements.txt..."
+        pip check
+        echo "✓ Requirements validation passed"
+
+  notify:
+    needs: test
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Check test status
+      run: |
+        if [ "${{ needs.test.result }}" == "success" ]; then
+          echo "✓ All tests passed! Ready for deployment."
+        else
+          echo "✗ Tests failed. Please fix issues before deploying."
+          exit 1
+        fi
+

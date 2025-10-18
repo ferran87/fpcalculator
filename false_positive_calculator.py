@@ -6,365 +6,507 @@ import numpy as np
 
 # Page configuration
 st.set_page_config(
-    page_title="False Positive Calculator",
-    page_icon="🔬",
+    page_title="AB Testing False Positive Calculator",
+    page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Title and description
-st.title("🔬 False Positive Calculator")
+st.title("📊 AB Testing False Positive Calculator")
 st.markdown("""
-This calculator helps you understand the relationship between test accuracy, disease prevalence, 
-and the probability that a positive test result is truly positive (Positive Predictive Value).
+Calculate how many of your statistically significant metrics are likely to be **false positives** 
+when running AB tests with multiple metrics.
 """)
 
 # Sidebar for inputs
-st.sidebar.header("Test Parameters")
+st.sidebar.header("Experiment Parameters")
 
-# Input parameters
-sensitivity = st.sidebar.slider(
-    "Sensitivity (True Positive Rate)",
-    min_value=0.0,
-    max_value=100.0,
-    value=95.0,
-    step=0.1,
-    help="Probability that the test correctly identifies someone with the condition"
-) / 100
+# Alpha input with info
+col1, col2 = st.sidebar.columns([3, 1])
+with col1:
+    alpha = st.number_input(
+        "Significance Level (α)",
+        min_value=0.001,
+        max_value=0.20,
+        value=0.05,
+        step=0.001,
+        format="%.3f"
+    )
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.popover("ℹ️"):
+        st.markdown("""
+        **What is Alpha (α)?**
+        
+        Alpha is your **significance level** - the threshold for declaring a result "statistically significant."
+        
+        - **α = 0.05** means you accept a 5% chance of a false positive on each individual metric
+        - Common values: 0.05, 0.01, 0.10
+        - Lower α = more conservative (fewer false positives, but might miss real effects)
+        
+        **Example:** With α = 0.05, if there's truly no effect, you'll still see a "significant" result 5% of the time by random chance.
+        """)
 
-specificity = st.sidebar.slider(
-    "Specificity (True Negative Rate)",
-    min_value=0.0,
-    max_value=100.0,
-    value=95.0,
-    step=0.1,
-    help="Probability that the test correctly identifies someone without the condition"
-) / 100
+# Beta input with info
+col1, col2 = st.sidebar.columns([3, 1])
+with col1:
+    beta = st.number_input(
+        "Type II Error Rate (β)",
+        min_value=0.05,
+        max_value=0.50,
+        value=0.20,
+        step=0.01,
+        format="%.2f"
+    )
+with col2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.popover("ℹ️"):
+        st.markdown("""
+        **What is Beta (β)?**
+        
+        Beta is your **Type II error rate** - the probability of missing a real effect.
+        
+        - **β = 0.20** means 20% chance of missing a real effect (80% power)
+        - **Power = 1 - β** (e.g., β = 0.20 → 80% power)
+        - Common values: 0.20 (80% power), 0.10 (90% power)
+        
+        **Example:** With β = 0.20, if there IS a real effect, you have an 80% chance of detecting it.
+        
+        **Note:** This affects how many true positives you expect, which influences the false positive rate among your significant results.
+        """)
 
-prevalence = st.sidebar.slider(
-    "Prevalence (% of population with condition)",
-    min_value=0.01,
-    max_value=100.0,
-    value=1.0,
-    step=0.01,
-    help="Percentage of the population that actually has the condition"
-) / 100
+power = 1 - beta
+st.sidebar.metric("Statistical Power", f"{power*100:.0f}%")
 
-population_size = st.sidebar.number_input(
-    "Population Size",
-    min_value=100,
-    max_value=1000000,
-    value=10000,
-    step=1000,
-    help="Total number of people being tested"
+st.sidebar.markdown("---")
+
+# Number of metrics
+num_metrics = st.sidebar.number_input(
+    "Number of Metrics Evaluated",
+    min_value=1,
+    max_value=1000,
+    value=20,
+    step=1,
+    help="Total number of metrics you're tracking in your AB test"
 )
+
+# Expected significant metrics
+expected_significant = st.sidebar.number_input(
+    "Expected Significant Metrics",
+    min_value=0,
+    max_value=num_metrics,
+    value=5,
+    step=1,
+    help="How many metrics do you expect to show a real effect?"
+)
+
+st.sidebar.markdown("---")
+
+# Bonferroni correction toggle
+apply_bonferroni = st.sidebar.checkbox(
+    "Apply Bonferroni Correction",
+    value=False,
+    help="Adjusts significance level to account for multiple comparisons"
+)
+
+with st.sidebar.expander("ℹ️ What is Bonferroni Correction?"):
+    st.markdown("""
+    **Bonferroni Correction** is a method to control false positives when testing multiple metrics.
+    
+    **How it works:**
+    - Divides your alpha by the number of metrics
+    - Adjusted α = α / number of metrics
+    - Makes each individual test more conservative
+    
+    **Example:**
+    - Original α = 0.05, testing 20 metrics
+    - Bonferroni α = 0.05 / 20 = 0.0025
+    
+    **Trade-off:**
+    - ✅ Reduces false positives
+    - ❌ Reduces power (might miss real effects)
+    - ⚠️ Can be too conservative with many metrics
+    """)
 
 # Calculate metrics
-def calculate_metrics(sensitivity, specificity, prevalence, population_size):
-    # Calculate number of people with and without condition
-    people_with_condition = int(population_size * prevalence)
-    people_without_condition = population_size - people_with_condition
+def calculate_false_positives(alpha, beta, num_metrics, expected_significant, apply_bonferroni):
+    """
+    Calculate expected false positives in AB testing with multiple metrics.
     
-    # Calculate test results
-    true_positives = int(people_with_condition * sensitivity)
-    false_negatives = people_with_condition - true_positives
+    Logic:
+    - Metrics with real effects: expected_significant
+    - Metrics with no real effect: num_metrics - expected_significant
+    - False positives come from metrics with no real effect that show significance by chance
+    - True positives come from metrics with real effects that we detect (based on power)
+    """
     
-    true_negatives = int(people_without_condition * specificity)
-    false_positives = people_without_condition - true_negatives
+    # Adjust alpha if Bonferroni correction is applied
+    if apply_bonferroni and num_metrics > 0:
+        adjusted_alpha = alpha / num_metrics
+    else:
+        adjusted_alpha = alpha
     
-    # Calculate derived metrics
-    total_positives = true_positives + false_positives
-    total_negatives = true_negatives + false_negatives
+    # Metrics with no real effect
+    null_metrics = num_metrics - expected_significant
     
-    # Positive Predictive Value (PPV)
-    ppv = true_positives / total_positives if total_positives > 0 else 0
+    # Expected false positives (from null metrics showing significance by chance)
+    expected_false_positives = null_metrics * adjusted_alpha
     
-    # Negative Predictive Value (NPV)
-    npv = true_negatives / total_negatives if total_negatives > 0 else 0
+    # Expected true positives (from real effects we detect, based on power)
+    power = 1 - beta
+    expected_true_positives = expected_significant * power
     
-    # False Positive Rate
-    false_positive_rate = 1 - specificity
+    # Total expected significant results
+    total_expected_significant = expected_false_positives + expected_true_positives
     
-    # False Negative Rate
-    false_negative_rate = 1 - sensitivity
-    
-    # False Discovery Rate (FDR)
-    fdr = false_positives / total_positives if total_positives > 0 else 0
+    # False discovery rate (proportion of significant results that are false positives)
+    if total_expected_significant > 0:
+        false_discovery_rate = expected_false_positives / total_expected_significant
+    else:
+        false_discovery_rate = 0
     
     return {
-        'people_with_condition': people_with_condition,
-        'people_without_condition': people_without_condition,
-        'true_positives': true_positives,
-        'false_positives': false_positives,
-        'true_negatives': true_negatives,
-        'false_negatives': false_negatives,
-        'total_positives': total_positives,
-        'total_negatives': total_negatives,
-        'ppv': ppv,
-        'npv': npv,
-        'false_positive_rate': false_positive_rate,
-        'false_negative_rate': false_negative_rate,
-        'fdr': fdr
+        'adjusted_alpha': adjusted_alpha,
+        'null_metrics': null_metrics,
+        'expected_false_positives': expected_false_positives,
+        'expected_true_positives': expected_true_positives,
+        'total_expected_significant': total_expected_significant,
+        'false_discovery_rate': false_discovery_rate,
+        'power': power
     }
 
-results = calculate_metrics(sensitivity, specificity, prevalence, population_size)
+# Calculate for both scenarios
+results_without = calculate_false_positives(alpha, beta, num_metrics, expected_significant, False)
+results_with = calculate_false_positives(alpha, beta, num_metrics, expected_significant, True)
 
-# Main content area
-col1, col2 = st.columns(2)
+# Use the selected results
+results = results_with if apply_bonferroni else results_without
+
+# Main content
+st.markdown("---")
+
+# Key Results - Large and prominent
+st.subheader("🎯 Key Results")
+
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    st.subheader("📊 Key Metrics")
-    
-    # Display key metrics in metric cards
-    metric_col1, metric_col2 = st.columns(2)
-    
-    with metric_col1:
-        st.metric(
-            "Positive Predictive Value (PPV)",
-            f"{results['ppv']*100:.2f}%",
-            help="Probability that a positive test result is truly positive"
-        )
-        st.metric(
-            "False Discovery Rate (FDR)",
-            f"{results['fdr']*100:.2f}%",
-            help="Proportion of positive results that are false positives"
-        )
-    
-    with metric_col2:
-        st.metric(
-            "Negative Predictive Value (NPV)",
-            f"{results['npv']*100:.2f}%",
-            help="Probability that a negative test result is truly negative"
-        )
-        st.metric(
-            "False Positive Rate",
-            f"{results['false_positive_rate']*100:.2f}%",
-            help="Proportion of people without condition who test positive"
-        )
+    st.metric(
+        "Expected Significant Metrics",
+        f"{results['total_expected_significant']:.1f}",
+        help="Total metrics expected to show statistical significance"
+    )
 
 with col2:
-    st.subheader("🎯 Confusion Matrix")
-    
-    # Create confusion matrix
-    confusion_matrix = pd.DataFrame({
-        'Condition Present': [results['true_positives'], results['false_negatives']],
-        'Condition Absent': [results['false_positives'], results['true_negatives']]
-    }, index=['Test Positive', 'Test Negative'])
-    
-    # Display as heatmap
-    fig = px.imshow(
-        confusion_matrix.values,
-        labels=dict(x="Actual Condition", y="Test Result", color="Count"),
-        x=['Condition Present', 'Condition Absent'],
-        y=['Test Positive', 'Test Negative'],
-        text_auto=True,
-        color_continuous_scale='Blues',
-        aspect="auto"
+    st.metric(
+        "Expected False Positives",
+        f"{results['expected_false_positives']:.1f}",
+        delta=f"{results['expected_false_positives']/num_metrics*100:.1f}% of all metrics",
+        delta_color="inverse",
+        help="Metrics showing significance by random chance (no real effect)"
     )
-    fig.update_layout(height=300)
-    st.plotly_chart(fig, width='stretch')
 
-# Detailed breakdown
-st.subheader("📈 Detailed Breakdown")
+with col3:
+    st.metric(
+        "Expected True Positives",
+        f"{results['expected_true_positives']:.1f}",
+        help="Real effects that you'll detect"
+    )
 
-breakdown_col1, breakdown_col2, breakdown_col3, breakdown_col4 = st.columns(4)
+with col4:
+    st.metric(
+        "False Discovery Rate",
+        f"{results['false_discovery_rate']*100:.1f}%",
+        delta="of significant results",
+        delta_color="off",
+        help="Proportion of your significant results that are likely false positives"
+    )
 
-with breakdown_col1:
-    st.info(f"""
-    **True Positives**  
-    {results['true_positives']:,}  
-    (Correctly identified as positive)
-    """)
-
-with breakdown_col2:
+# Warning if FDR is high
+if results['false_discovery_rate'] > 0.3:
     st.error(f"""
-    **False Positives**  
-    {results['false_positives']:,}  
-    (Incorrectly identified as positive)
+    ⚠️ **High False Discovery Rate!** 
+    
+    {results['false_discovery_rate']*100:.0f}% of your significant metrics are likely to be false positives. 
+    Consider applying Bonferroni correction or reducing the number of metrics.
     """)
-
-with breakdown_col3:
-    st.success(f"""
-    **True Negatives**  
-    {results['true_negatives']:,}  
-    (Correctly identified as negative)
-    """)
-
-with breakdown_col4:
+elif results['false_discovery_rate'] > 0.15:
     st.warning(f"""
-    **False Negatives**  
-    {results['false_negatives']:,}  
-    (Incorrectly identified as negative)
+    ⚠️ **Moderate False Discovery Rate** 
+    
+    {results['false_discovery_rate']*100:.0f}% of your significant metrics are likely to be false positives. 
+    Be cautious when interpreting results.
+    """)
+else:
+    st.success(f"""
+    ✅ **Good False Discovery Rate** 
+    
+    Only {results['false_discovery_rate']*100:.0f}% of your significant metrics are likely to be false positives.
     """)
 
-# Visualization of results
-st.subheader("📉 Test Results Distribution")
+st.markdown("---")
 
-fig = go.Figure(data=[
-    go.Bar(
-        name='True Positives',
-        x=['Positive Tests'],
-        y=[results['true_positives']],
-        marker_color='lightgreen'
-    ),
-    go.Bar(
-        name='False Positives',
-        x=['Positive Tests'],
-        y=[results['false_positives']],
-        marker_color='lightcoral'
-    ),
-    go.Bar(
-        name='True Negatives',
-        x=['Negative Tests'],
-        y=[results['true_negatives']],
-        marker_color='lightblue'
-    ),
-    go.Bar(
-        name='False Negatives',
-        x=['Negative Tests'],
-        y=[results['false_negatives']],
-        marker_color='lightyellow'
-    )
-])
+# Comparison section
+st.subheader("🔄 With vs Without Bonferroni Correction")
 
-fig.update_layout(
-    barmode='stack',
-    title='Distribution of Test Results',
-    xaxis_title='Test Outcome',
-    yaxis_title='Number of People',
-    height=400
-)
-
-st.plotly_chart(fig, width='stretch')
-
-# Sensitivity analysis
-st.subheader("🔍 Sensitivity Analysis: How Prevalence Affects PPV")
-
-prevalence_range = np.logspace(-4, -0.3, 50)  # From 0.01% to 50%
-ppv_values = []
-
-for prev in prevalence_range:
-    temp_results = calculate_metrics(sensitivity, specificity, prev, 10000)
-    ppv_values.append(temp_results['ppv'] * 100)
-
-fig = go.Figure()
-fig.add_trace(go.Scatter(
-    x=prevalence_range * 100,
-    y=ppv_values,
-    mode='lines',
-    line=dict(color='blue', width=3),
-    name='PPV'
-))
-
-fig.add_vline(
-    x=prevalence * 100,
-    line_dash="dash",
-    line_color="red",
-    annotation_text=f"Current: {prevalence*100:.2f}%"
-)
-
-fig.update_layout(
-    title='Positive Predictive Value vs Prevalence',
-    xaxis_title='Prevalence (%)',
-    yaxis_title='Positive Predictive Value (%)',
-    xaxis_type='log',
-    height=400,
-    hovermode='x unified'
-)
-
-st.plotly_chart(fig, width='stretch')
-
-# Interpretation guide
-st.subheader("📚 Interpretation Guide")
-
-with st.expander("What do these metrics mean?"):
-    st.markdown("""
-    ### Key Concepts:
-    
-    **Sensitivity (True Positive Rate)**
-    - The ability of the test to correctly identify those with the condition
-    - Higher is better
-    
-    **Specificity (True Negative Rate)**
-    - The ability of the test to correctly identify those without the condition
-    - Higher is better
-    
-    **Prevalence**
-    - The proportion of the population that actually has the condition
-    - Critical factor in determining PPV
-    
-    **Positive Predictive Value (PPV)**
-    - If you test positive, this is the probability you actually have the condition
-    - **Most important metric for interpreting a positive test result**
-    - Heavily influenced by prevalence
-    
-    **False Discovery Rate (FDR)**
-    - The proportion of positive test results that are false positives
-    - FDR = 1 - PPV
-    
-    **Key Insight:**
-    Even with high sensitivity and specificity, a low prevalence can result in a surprisingly 
-    low PPV, meaning many positive results are false positives!
-    """)
-
-with st.expander("Example Scenarios"):
-    st.markdown("""
-    ### Real-World Examples:
-    
-    **Rare Disease Screening (1% prevalence)**
-    - Even with 95% sensitivity and 95% specificity
-    - PPV might only be around 16%
-    - This means 84% of positive results are false positives!
-    
-    **Common Condition (50% prevalence)**
-    - With the same test accuracy (95%/95%)
-    - PPV would be around 95%
-    - Only 5% of positive results are false positives
-    
-    **Lesson:** Prevalence matters enormously in interpreting test results!
-    """)
-
-# Export results
-st.subheader("💾 Export Results")
-
-export_data = pd.DataFrame({
+comparison_data = pd.DataFrame({
     'Metric': [
-        'Sensitivity', 'Specificity', 'Prevalence', 'Population Size',
-        'True Positives', 'False Positives', 'True Negatives', 'False Negatives',
-        'Positive Predictive Value', 'Negative Predictive Value',
-        'False Discovery Rate', 'False Positive Rate'
+        'Adjusted Alpha (α)',
+        'Expected False Positives',
+        'Expected True Positives',
+        'Total Significant Metrics',
+        'False Discovery Rate'
     ],
-    'Value': [
-        f"{sensitivity*100:.2f}%",
-        f"{specificity*100:.2f}%",
-        f"{prevalence*100:.2f}%",
-        f"{population_size:,}",
-        f"{results['true_positives']:,}",
-        f"{results['false_positives']:,}",
-        f"{results['true_negatives']:,}",
-        f"{results['false_negatives']:,}",
-        f"{results['ppv']*100:.2f}%",
-        f"{results['npv']*100:.2f}%",
-        f"{results['fdr']*100:.2f}%",
-        f"{results['false_positive_rate']*100:.2f}%"
+    'Without Bonferroni': [
+        f"{results_without['adjusted_alpha']:.4f}",
+        f"{results_without['expected_false_positives']:.2f}",
+        f"{results_without['expected_true_positives']:.2f}",
+        f"{results_without['total_expected_significant']:.2f}",
+        f"{results_without['false_discovery_rate']*100:.1f}%"
+    ],
+    'With Bonferroni': [
+        f"{results_with['adjusted_alpha']:.4f}",
+        f"{results_with['expected_false_positives']:.2f}",
+        f"{results_with['expected_true_positives']:.2f}",
+        f"{results_with['total_expected_significant']:.2f}",
+        f"{results_with['false_discovery_rate']*100:.1f}%"
     ]
 })
 
-st.dataframe(export_data, use_container_width=True)
+st.dataframe(comparison_data, use_container_width=True, hide_index=True)
+
+# Visualization
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("📊 Breakdown of Significant Results")
+    
+    # Create stacked bar chart
+    fig = go.Figure()
+    
+    scenarios = ['Without<br>Bonferroni', 'With<br>Bonferroni']
+    false_pos = [results_without['expected_false_positives'], results_with['expected_false_positives']]
+    true_pos = [results_without['expected_true_positives'], results_with['expected_true_positives']]
+    
+    fig.add_trace(go.Bar(
+        name='False Positives',
+        x=scenarios,
+        y=false_pos,
+        marker_color='#FF6B6B',
+        text=[f"{fp:.1f}" for fp in false_pos],
+        textposition='inside'
+    ))
+    
+    fig.add_trace(go.Bar(
+        name='True Positives',
+        x=scenarios,
+        y=true_pos,
+        marker_color='#51CF66',
+        text=[f"{tp:.1f}" for tp in true_pos],
+        textposition='inside'
+    ))
+    
+    fig.update_layout(
+        barmode='stack',
+        yaxis_title='Expected Significant Metrics',
+        showlegend=True,
+        height=400,
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+with col2:
+    st.subheader("📈 False Discovery Rate Comparison")
+    
+    # Create FDR comparison
+    fig2 = go.Figure()
+    
+    fig2.add_trace(go.Bar(
+        x=scenarios,
+        y=[results_without['false_discovery_rate']*100, results_with['false_discovery_rate']*100],
+        marker_color=['#FF6B6B', '#4DABF7'],
+        text=[f"{results_without['false_discovery_rate']*100:.1f}%", 
+              f"{results_with['false_discovery_rate']*100:.1f}%"],
+        textposition='outside'
+    ))
+    
+    fig2.update_layout(
+        yaxis_title='False Discovery Rate (%)',
+        showlegend=False,
+        height=400,
+        yaxis_range=[0, max(results_without['false_discovery_rate']*100, results_with['false_discovery_rate']*100) * 1.2]
+    )
+    
+    st.plotly_chart(fig2, use_container_width=True)
+
+# Detailed breakdown
+st.markdown("---")
+st.subheader("📋 Detailed Breakdown")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### Your Experiment")
+    st.markdown(f"""
+    - **Total Metrics Tracked:** {num_metrics}
+    - **Metrics with Real Effects:** {expected_significant}
+    - **Metrics with No Real Effect:** {results['null_metrics']}
+    - **Significance Level:** α = {alpha}
+    - **Statistical Power:** {results['power']*100:.0f}%
+    - **Bonferroni Correction:** {'✅ Applied' if apply_bonferroni else '❌ Not Applied'}
+    """)
+    
+    if apply_bonferroni:
+        st.markdown(f"""
+        - **Adjusted Alpha:** {results['adjusted_alpha']:.4f} (α / {num_metrics})
+        """)
+
+with col2:
+    st.markdown("### What This Means")
+    st.markdown(f"""
+    Out of **{results['total_expected_significant']:.1f}** metrics showing statistical significance:
+    
+    - **{results['expected_true_positives']:.1f}** are likely **real effects** ✅
+    - **{results['expected_false_positives']:.1f}** are likely **false positives** ❌
+    
+    **Bottom Line:** {results['false_discovery_rate']*100:.0f}% of your "significant" 
+    results are probably just noise.
+    """)
+
+# Sensitivity Analysis
+st.markdown("---")
+st.subheader("🔍 Sensitivity Analysis: Impact of Number of Metrics")
+
+# Generate data for different numbers of metrics
+metric_range = np.linspace(1, min(200, num_metrics * 3), 50).astype(int)
+fdr_without_bonf = []
+fdr_with_bonf = []
+
+for n_metrics in metric_range:
+    # Scale expected significant proportionally
+    scaled_expected = int(expected_significant * n_metrics / num_metrics)
+    
+    res_without = calculate_false_positives(alpha, beta, n_metrics, scaled_expected, False)
+    res_with = calculate_false_positives(alpha, beta, n_metrics, scaled_expected, True)
+    
+    fdr_without_bonf.append(res_without['false_discovery_rate'] * 100)
+    fdr_with_bonf.append(res_with['false_discovery_rate'] * 100)
+
+fig3 = go.Figure()
+
+fig3.add_trace(go.Scatter(
+    x=metric_range,
+    y=fdr_without_bonf,
+    mode='lines',
+    name='Without Bonferroni',
+    line=dict(color='#FF6B6B', width=3)
+))
+
+fig3.add_trace(go.Scatter(
+    x=metric_range,
+    y=fdr_with_bonf,
+    mode='lines',
+    name='With Bonferroni',
+    line=dict(color='#4DABF7', width=3)
+))
+
+# Add current position
+fig3.add_vline(
+    x=num_metrics,
+    line_dash="dash",
+    line_color="gray",
+    annotation_text=f"Current: {num_metrics} metrics"
+)
+
+fig3.update_layout(
+    title='How False Discovery Rate Changes with Number of Metrics',
+    xaxis_title='Number of Metrics',
+    yaxis_title='False Discovery Rate (%)',
+    height=400,
+    hovermode='x unified',
+    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+)
+
+st.plotly_chart(fig3, use_container_width=True)
+
+# Recommendations
+st.markdown("---")
+st.subheader("💡 Recommendations for PMs")
+
+rec_col1, rec_col2 = st.columns(2)
+
+with rec_col1:
+    st.markdown("### ✅ Best Practices")
+    st.markdown("""
+    1. **Limit your metrics** - Focus on 3-5 key metrics instead of tracking everything
+    2. **Pre-register your metrics** - Decide which metrics matter before running the test
+    3. **Use primary vs secondary metrics** - Only apply strict significance to primary metrics
+    4. **Consider Bonferroni** - Especially when testing many metrics
+    5. **Increase sample size** - Higher power reduces false discovery rate
+    6. **Replicate findings** - Test significant results in follow-up experiments
+    """)
+
+with rec_col2:
+    st.markdown("### ⚠️ Common Pitfalls")
+    st.markdown("""
+    1. **P-hacking** - Testing many metrics and only reporting significant ones
+    2. **Ignoring multiple testing** - Not accounting for testing many metrics
+    3. **Over-interpreting noise** - Treating all significant results as real
+    4. **Stopping tests early** - Peeking at results and stopping when significant
+    5. **Cherry-picking segments** - Testing many segments and reporting the significant ones
+    6. **Changing metrics mid-test** - Adding metrics after seeing results
+    """)
+
+# Export functionality
+st.markdown("---")
+st.subheader("💾 Export Results")
+
+export_data = pd.DataFrame({
+    'Parameter': [
+        'Significance Level (α)',
+        'Type II Error Rate (β)',
+        'Statistical Power',
+        'Number of Metrics',
+        'Expected Significant Metrics',
+        'Bonferroni Correction',
+        '',
+        'Adjusted Alpha',
+        'Expected False Positives',
+        'Expected True Positives',
+        'Total Expected Significant',
+        'False Discovery Rate'
+    ],
+    'Value': [
+        f"{alpha}",
+        f"{beta}",
+        f"{results['power']*100:.1f}%",
+        f"{num_metrics}",
+        f"{expected_significant}",
+        'Yes' if apply_bonferroni else 'No',
+        '',
+        f"{results['adjusted_alpha']:.6f}",
+        f"{results['expected_false_positives']:.2f}",
+        f"{results['expected_true_positives']:.2f}",
+        f"{results['total_expected_significant']:.2f}",
+        f"{results['false_discovery_rate']*100:.1f}%"
+    ]
+})
 
 csv = export_data.to_csv(index=False)
 st.download_button(
-    label="Download Results as CSV",
+    label="📥 Download Results as CSV",
     data=csv,
-    file_name="false_positive_calculator_results.csv",
+    file_name="ab_test_false_positive_analysis.csv",
     mime="text/csv"
 )
 
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center'>
-    <p>Made with ❤️ using Streamlit | Understanding test accuracy and false positives</p>
+<div style='text-align: center; color: #666;'>
+    <p><strong>AB Testing False Positive Calculator</strong> | Help PMs understand multiple testing problems</p>
+    <p>Remember: Not all statistically significant results are real effects! 📊</p>
 </div>
 """, unsafe_allow_html=True)
-
