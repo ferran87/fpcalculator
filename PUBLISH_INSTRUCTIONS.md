@@ -29,7 +29,7 @@ git commit -m "Initial commit: False Positive Calculator app"
 2. Click the **"+"** icon in the top right corner
 3. Select **"New repository"**
 4. Fill in the details:
-   - **Repository name**: `fpcalculator`
+   - **Repository name**: `fpcalculator` (exactly as shown)
    - **Description**: "A comprehensive Streamlit app for understanding false positive rates in diagnostic testing"
    - **Visibility**: Choose **Public**
    - **DO NOT** initialize with README, .gitignore, or license (we already have these)

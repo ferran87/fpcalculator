@@ -46,7 +46,7 @@ A comprehensive Streamlit web application for understanding the relationship bet
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/fpcalculator.git
+git clone https://github.com/YOUR_USERNAME/fpcalculator.git
 cd fpcalculator
 ```
 
