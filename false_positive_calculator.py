@@ -195,7 +195,7 @@ with col1:
     st.metric(
         "Expected Significant Metrics",
         f"{results['total_expected_significant']:.1f}",
-        help="Total metrics expected to show statistical significance"
+        help="Total metrics expected to show statistical significance, including false positives and true positives"
     )
 
 with col2:
