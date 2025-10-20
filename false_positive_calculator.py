@@ -29,7 +29,7 @@ with col1:
         "Significance Level (α)",
         min_value=0.001,
         max_value=0.20,
-        value=0.05,
+        value=0.10,
         step=0.001,
         format="%.3f"
     )
