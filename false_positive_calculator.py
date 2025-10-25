@@ -96,7 +96,7 @@ expected_significant = st.sidebar.number_input(
     "Expected Significant Metrics",
     min_value=0,
     max_value=num_metrics,
-    value=5,
+    value=min(5, num_metrics),
     step=1,
     help="How many metrics do you expect to show a real effect?"
 )
